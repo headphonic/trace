@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trace</title>
+<style>
+:root{--bg:#f2f0ec;--panel:rgba(250,249,246,.94);--ink:#1d1b18;--muted:#6b665e;--line:rgba(0,0,0,.16);--btn:#e6e2db;--accent:#b45309;--onaccent:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151412;--panel:rgba(30,28,25,.94);--ink:#f1eee8;--muted:#a39d92;--line:rgba(255,255,255,.16);--btn:#34312c;--accent:#ffcf33;--onaccent:#1d1b18;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#151412;--panel:rgba(30,28,25,.94);--ink:#f1eee8;--muted:#a39d92;--line:rgba(255,255,255,.16);--btn:#34312c;--accent:#ffcf33;--onaccent:#1d1b18;color-scheme:dark}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none}
+#vid{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:var(--bg)}
+#stage{position:fixed;inset:0;touch-action:none;overflow:hidden}
+#ov{position:absolute;left:50%;top:50%;transform-origin:center;max-width:none;pointer-events:none;opacity:.5}
+#grid{position:fixed;inset:0;pointer-events:none;display:none;background-image:linear-gradient(rgba(225,29,72,.4) 1px,transparent 1px),linear-gradient(90deg,rgba(225,29,72,.4) 1px,transparent 1px);background-size:12.5vmin 12.5vmin;background-position:center}
+#intro{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:none}
+#intro .card{pointer-events:auto;max-width:340px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+#intro h1{margin:0 0 6px;font-size:22px;font-weight:650}
+#intro p{margin:0 0 14px;color:var(--muted);font-size:15px}
+#err{color:#c2410c;margin:10px 0 0;font-size:14px}
+#panel{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.row label{width:62px;font-size:14px;color:var(--muted)}
+.row input[type=range]{flex:1;accent-color:var(--accent);min-width:0}
+.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+button{font:inherit;font-size:14px;color:var(--ink);background:var(--btn);border:0;border-radius:10px;padding:11px 4px;min-height:44px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button[aria-pressed="true"]{background:var(--accent);color:var(--onaccent)}
+button.main{background:var(--accent);color:var(--onaccent);font-weight:600;width:100%}
+#show{position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:none;background:var(--panel);border:1px solid var(--line);padding:11px 16px}
+#hint{position:fixed;left:0;right:0;top:calc(14px + env(safe-area-inset-top,0px));text-align:center;pointer-events:none}
+#hint span{display:inline-block;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:14px;color:var(--muted)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<video id="vid" playsinline muted autoplay></video>
+<div id="stage"><canvas id="ov"></canvas></div>
+<div id="grid"></div>
+<div id="hint"><span id="hintText">Choose a photo to trace</span></div>
+
+<div id="intro">
+  <div class="card">
+    <h1>Trace</h1>
+    <p>Put your phone on a stand above your paper. The photo you pick shows over the live camera so you can draw along its lines.</p>
+    <button class="main" id="start">Start camera</button>
+    <p id="err" role="alert"></p>
+  </div>
+</div>
+
+<div id="panel">
+  <div class="row"><label for="op">Opacity</label><input id="op" type="range" min="5" max="100" value="50"></div>
+  <div class="row" id="detailRow" hidden><label for="detail">Detail</label><input id="detail" type="range" min="5" max="120" value="40"></div>
+  <div class="btns">
+    <button id="photo">Photo</button>
+    <button id="mode">Original</button>
+    <button id="lock" aria-pressed="false">Lock</button>
+    <button id="flip">Flip</button>
+    <button id="gridBtn" aria-pressed="false">Grid</button>
+    <button id="reset">Reset</button>
+    <button id="hide">Hide</button>
+    <button id="cam">Camera</button>
+  </div>
+</div>
+<button id="show">Controls</button>
+<input type="file" id="file" accept="image/*" hidden>
+
+<script>
+const $=id=>document.getElementById(id);
+const vid=$('vid'),ov=$('ov'),stage=$('stage'),ctx=ov.getContext('2d',{willReadFrequently:true});
+let img=null,st={x:0,y:0,s:1,r:0,f:1},mode=0,locked=false,stream=null,facing='environment';
+const MODES=['Original','Grayscale','Outline'];
+
+function apply(){ov.style.transform=`translate(-50%,-50%) translate(${st.x}px,${st.y}px) rotate(${st.r}rad) scale(${st.s*st.f},${st.s})`}
+function fit(){
+  if(!ov.width)return;
+  st={x:0,y:0,r:0,f:1,s:Math.min(stage.clientWidth*.9/ov.width,stage.clientHeight*.55/ov.height)};
+  apply();
+}
+function render(){
+  if(!img)return;
+  const k=Math.min(1,1200/Math.max(img.naturalWidth,img.naturalHeight));
+  ov.width=Math.round(img.naturalWidth*k);ov.height=Math.round(img.naturalHeight*k);
+  ctx.drawImage(img,0,0,ov.width,ov.height);
+  ov.style.filter=mode===1?'grayscale(1) contrast(1.5)':'none';
+  if(mode===2)outline();
+}
+function outline(){
+  const w=ov.width,h=ov.height,d=ctx.getImageData(0,0,w,h),p=d.data,g=new Float32Array(w*h);
+  for(let i=0;i<w*h;i++)g[i]=.299*p[i*4]+.587*p[i*4+1]+.114*p[i*4+2];
+  const thr=+$('detail').value,out=ctx.createImageData(w,h),o=out.data;
+  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    const gx=-g[i-w-1]-2*g[i-1]-g[i+w-1]+g[i-w+1]+2*g[i+1]+g[i+w+1];
+    const gy=-g[i-w-1]-2*g[i-w]-g[i-w+1]+g[i+w-1]+2*g[i+w]+g[i+w+1];
+    const m=Math.sqrt(gx*gx+gy*gy)/4;
+    const a=Math.max(0,Math.min(255,(m-(120-thr)*.5)*8));
+    const j=i*4;o[j]=225;o[j+1]=29;o[j+2]=72;o[j+3]=a;
+  }
+  ctx.putImageData(out,0,0);
+}
+let raf=0;function later(){cancelAnimationFrame(raf);raf=requestAnimationFrame(render)}
+
+function setHint(){$('hintText').textContent=img?'':'Choose a photo to trace';$('hint').hidden=!!img}
+$('photo').onclick=()=>$('file').click();
+$('file').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const im=new Image();
+  im.onload=()=>{img=im;render();fit();setHint()};
+  im.src=URL.createObjectURL(f);e.target.value='';
+};
+$('op').oninput=e=>{ov.style.opacity=e.target.value/100};
+$('detail').oninput=later;
+$('mode').onclick=()=>{
+  mode=(mode+1)%3;$('mode').textContent=MODES[mode];
+  $('detailRow').hidden=mode!==2;render();
+};
+$('lock').onclick=e=>{locked=!locked;e.target.setAttribute('aria-pressed',locked);e.target.textContent=locked?'Locked':'Lock'};
+$('flip').onclick=()=>{st.f*=-1;apply()};
+$('reset').onclick=fit;
+$('gridBtn').onclick=e=>{const on=e.target.getAttribute('aria-pressed')!=='true';e.target.setAttribute('aria-pressed',on);$('grid').style.display=on?'block':'none'};
+$('hide').onclick=()=>{$('panel').hidden=true;$('show').style.display='block'};
+$('show').onclick=()=>{$('panel').hidden=false;$('show').style.display='none'};
+
+/* gestures: one finger drags, two fingers pinch + twist */
+const ptrs=new Map();let prev=null;
+function metrics(){
+  const a=[...ptrs.values()];
+  if(a.length<2)return{x:a[0].x,y:a[0].y,d:0,a:0};
+  const dx=a[1].x-a[0].x,dy=a[1].y-a[0].y;
+  return{x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2,d:Math.hypot(dx,dy),a:Math.atan2(dy,dx)};
+}
+stage.addEventListener('pointerdown',e=>{
+  if(locked||!img)return;
+  stage.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});prev=metrics();
+});
+stage.addEventListener('pointermove',e=>{
+  if(!ptrs.has(e.pointerId))return;
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const m=metrics();
+  st.x+=m.x-prev.x;st.y+=m.y-prev.y;
+  if(ptrs.size>1&&prev.d>0){
+    st.s*=m.d/prev.d;
+    st.r+=(m.a-prev.a)*(st.f);
+  }
+  prev=m;apply();
+});
+const end=e=>{ptrs.delete(e.pointerId);prev=ptrs.size?metrics():null};
+stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',end);
+stage.addEventListener('wheel',e=>{if(locked)return;e.preventDefault();st.s*=e.deltaY<0?1.05:.95;apply()},{passive:false});
+
+/* camera */
+async function openCam(){
+  try{
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    vid.srcObject=stream;await vid.play();
+    $('intro').hidden=true;$('err').textContent='';keepAwake();
+  }catch(e){
+    $('intro').hidden=false;
+    $('err').textContent='Camera unavailable. Allow camera access for this page, then try again. If the page is embedded, open it in its own tab.';
+  }
+}
+$('start').onclick=openCam;
+$('cam').onclick=()=>{facing=facing==='environment'?'user':'environment';openCam()};
+
+let wl=null;
+async function keepAwake(){try{if('wakeLock' in navigator)wl=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&stream)keepAwake()});
+window.addEventListener('resize',()=>{if(img&&!ptrs.size)apply()});
+setHint();
+</script>
+</body>
+</html>
